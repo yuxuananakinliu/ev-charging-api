@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>EV Charging Stations</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Leaflet + MarkerCluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+
+  <style>
+    :root { --sidebar-w: 340px; --bg: #fafafa; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #app { display: grid; grid-template-columns: var(--sidebar-w) 1fr; height: 100vh; }
+    #app.collapsed { grid-template-columns: 0 1fr; }
+    aside {
+      padding: 12px; border-right: 1px solid #eaeaea; overflow: auto;
+      background: var(--bg);
+      box-shadow: inset -1px 0 0 rgba(0,0,0,0.03);
+    }
+    #map { height: 100%; }
+    h3 { margin: 0 0 8px; }
+    label { display: block; margin-top: 8px; font-size: 14px; }
+    input[type="number"], select { width: 100%; padding: 6px; margin-top: 4px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
+    button { margin-top: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid #ddd; background: #fff; cursor: pointer; }
+    button:hover { background: #f3f3f3; }
+    .muted { font-size: 12px; color: #666; }
+    .list { list-style: none; padding: 0; margin: 12px 0 80px; }
+    .list li { padding: 10px 0; border-bottom: 1px solid #eee; cursor: pointer; }
+    .row { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+    .badges { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .badge { font-size: 12px; padding: 2px 6px; border-radius: 12px; border: 1px solid #ccc; background:#fff; }
+    /* Sticky controls bar */
+    .controls {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--bg);
+      padding-bottom: 8px; margin-bottom: 8px;
+      border-bottom: 1px solid #eaeaea;
+    }
+    /* Collapse button */
+    #toggleSidebar {
+      position: fixed;      /* was absolute */
+      left: 12px;
+      top: 12px;
+      z-index: 9999;        /* above Leaflet controls */
+      border-radius: 10px;
+      border: 1px solid #ddd;
+      background: #fff;
+      box-shadow: 0 4px 14px rgba(0,0,0,.12);
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    /* Loading spinner */
+    #loading {
+      position: absolute; right: 14px; top: 14px; z-index: 1000;
+      background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 6px 10px;
+      box-shadow: 0 4px 14px rgba(0,0,0,.12); display: none;
+    }
+    /* Mobile: stack */
+    @media (max-width: 800px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: 40% 1fr; }
+    #app.collapsed { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid #eee; }
+
+    /* make the toggle float above the map on mobile too */
+    #toggleSidebar {
+      position: fixed;   /* was absolute / inherited */
+      left: 10px;
+      top: 10px;
+      z-index: 9999;     /* above Leaflet controls */
+    }
+    }
+  </style>
+</head>
+<body>
+  <button id="toggleSidebar">☰</button>
+  <div id="loading">Loading…</div>
+
+  <div id="app">
+    <aside>
+      <div class="controls">
+        <h3>EV Stations</h3>
+
+        <label>Connector
+          <select id="connector">
+            <option value="">Any</option>
+            <option>CCS</option>
+            <option>TESLA/NACS</option>
+            <option>CHADEMO</option>
+            <option>J1772</option>
+          </select>
+        </label>
+
+        <label>Radius (km)
+          <input id="radius" type="number" min="1" max="200" value="15" />
+        </label>
+
+        <label>Sort by
+          <select id="sort">
+            <option value="distance">Nearest</option>
+            <option value="dcfc">Most DCFC ports</option>
+            <option value="level2">Most Level2 ports</option>
+          </select>
+        </label>
+
+        <label><input type="checkbox" id="dcfc" /> DC fast only</label>
+
+        <div class="muted">API: <code id="apiBase">http://127.0.0.1:8000</code></div>
+
+        <button id="useLoc">Use my location</button>
+        <button id="search">Search here</button>
+
+        <label style="margin-top:10px;"><input type="checkbox" id="autoSearch" /> Search as I move the map</label>
+        <p class="muted" id="summary"></p>
+      </div>
+
+      <ul id="results" class="list"></ul>
+    </aside>
+
+    <div id="map"></div>
+  </div>
+
+  <!-- Leaflet + MarkerCluster JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <script>
+    // ---- config ----
+    const API_BASE = document.getElementById('apiBase').textContent;
+    const $ = (id)=>document.getElementById(id);
+    const root = document.getElementById('app');
+    const loading = $('loading');
+
+    // ---- map init ----
+    const map = L.map('map').setView([37.7749, -122.4194], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    let markersLayer = L.markerClusterGroup({ showCoverageOnHover:false, maxClusterRadius: 45 }).addTo(map);
+
+    // ---- helpers ----
+    function fmtName(s){ return s.name || s.address || 'Unnamed'; }
+    function fmtAddr(s){ return [s.address, s.city, s.state].filter(Boolean).join(', '); }
+    function gmaps(lat, lon){ return `https://www.google.com/maps?q=${lat},${lon}`; }
+    function badge(text){ const el=document.createElement('span'); el.className='badge'; el.textContent=text; return el; }
+    function showLoading(v){ loading.style.display = v ? 'block' : 'none'; }
+
+    // Persist filters + sidebar state
+    ['connector','radius','dcfc','autoSearch','sort'].forEach(id=>{
+      const el = $(id);
+      const saved = localStorage.getItem('ev_' + id);
+      if (saved !== null) {
+        if (el.type === 'checkbox') el.checked = saved === '1'; else el.value = saved;
+      }
+      el.addEventListener('change', ()=>{
+        localStorage.setItem('ev_' + id, el.type === 'checkbox' ? (el.checked ? '1':'0') : el.value);
+      });
+    });
+    if (localStorage.getItem('ev_sidebar') === '1') root.classList.add('collapsed');
+
+    // ---- API calls ----
+    function fetchStations(lat, lon){
+      const radius = +$('radius').value || 15;
+      const dcfc = $('dcfc').checked;
+      const conn = $('connector').value;
+      const params = new URLSearchParams({ lat, lon, radius_km: radius });
+      if (dcfc) params.append('dcfc_only', 'true');
+      if (conn) params.append('connector', conn);
+      return fetch(`${API_BASE}/stations?${params}`).then(r=>r.json());
+    }
+    function fetchDetail(id){ return fetch(`${API_BASE}/stations/${id}`).then(r=>r.json()); }
+
+    // ---- render ----
+    async function renderStations(data){
+      const sortBy = $('sort').value;
+      const rows = [...(data.results || [])];
+
+      // client-side sort
+      if (sortBy === 'dcfc') rows.sort((a,b)=>(b.dcfc_ports||0)-(a.dcfc_ports||0));
+      else if (sortBy === 'level2') rows.sort((a,b)=>(b.level2_ports||0)-(a.level2_ports||0));
+      else rows.sort((a,b)=>(a.distance_km||0)-(b.distance_km||0));
+
+      markersLayer.clearLayers();
+      const list = $('results'); list.innerHTML = '';
+      $('summary').textContent = `${rows.length} results`;
+
+      for (const s of rows){
+        const hasId = Number.isFinite(Number(s.id));
+        const marker = L.marker([s.latitude, s.longitude]).addTo(markersLayer);
+        marker.bindPopup(`
+          <div>
+            <b>${fmtName(s)}</b><br/>
+            ${fmtAddr(s)}<br/>
+            ${s.distance_km} km • ${s.network || 'Unknown network'}<br/>
+            <a href="${gmaps(s.latitude, s.longitude)}" target="_blank" rel="noopener">Open in Maps</a>
+            ${hasId ? `<div class="badges" id="b-${s.id}"></div>` : ``}
+          </div>
+        `);
+
+        // async connector badges
+        if (hasId) {
+          fetchDetail(Number(s.id)).then(d => {
+            const wrap = document.createElement('div');
+            wrap.className = 'badges';
+            (d.connectors || []).forEach(c => wrap.appendChild(badge(c)));
+            const spot = document.getElementById(`b-${s.id}`);
+            if (spot) spot.replaceWith(wrap);
+          }).catch(()=>{});
+        }
+
+        // sidebar item
+        const li=document.createElement('li');
+        li.innerHTML = `
+          <div class="row">
+            <div>${fmtName(s)}</div>
+            <div class="muted">${s.distance_km} km</div>
+          </div>
+          <div class="muted">${fmtAddr(s)}</div>
+        `;
+        li.onclick = ()=>{ marker.openPopup(); map.panTo([s.latitude, s.longitude]); };
+        list.appendChild(li);
+      }
+    }
+
+    function searchAtCenter(){
+      const c = map.getCenter();
+      showLoading(true);
+      fetchStations(c.lat, c.lng)
+        .then(d=>{ showLoading(false); renderStations(d); })
+        .catch(err=>{ showLoading(false); alert(err); });
+    }
+
+    // ---- interactions ----
+    $('useLoc').onclick = ()=>{
+      if(!navigator.geolocation){ alert('Geolocation not supported'); return; }
+      navigator.geolocation.getCurrentPosition(pos=>{
+        const { latitude, longitude } = pos.coords;
+        map.setView([latitude, longitude], 13);
+        searchAtCenter();
+      }, err=>alert('Location error: '+err.message));
+    };
+    $('search').onclick = searchAtCenter;
+    $('sort').onchange = searchAtCenter; // resort on change
+
+    // search as map moves (debounced)
+    function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+    const debounced = debounce(searchAtCenter, 400);
+    if ($('autoSearch').checked) map.on('moveend', debounced);
+    $('autoSearch').addEventListener('change', e=>{
+      if (e.target.checked) map.on('moveend', debounced);
+      else map.off('moveend', debounced);
+      localStorage.setItem('ev_autoSearch', e.target.checked ? '1':'0');
+    });
+
+    // collapse/expand sidebar
+    $('toggleSidebar').onclick = ()=>{
+      root.classList.toggle('collapsed');
+      localStorage.setItem('ev_sidebar', root.classList.contains('collapsed') ? '1' : '0');
+      setTimeout(()=>map.invalidateSize(), 250);
+    };
+
+    // initial load
+    searchAtCenter();
+  </script>
+</body>
+</html>
