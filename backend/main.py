@@ -96,12 +96,13 @@ def stations(
     dlon = radius_km / (111.0 * max(0.1, math.cos(math.radians(lat))))
 
     sql = (
-        f"SELECT s.station_id, "
-        f"       s.station_name, "
-        f"       s.network, s.status, s.address, s.city, s.state, s.zip, "
-        f"       s.latitude, s.longitude, s.access, s.level2_ports, s.dcfc_ports "
-        f"FROM stations s "
-        f"WHERE s.latitude BETWEEN ? AND ? AND s.longitude BETWEEN ? AND ?"
+        "SELECT "
+        "  s.station_id   AS id, "
+        "  s.station_name AS name, "
+        "  s.network, s.status, s.address, s.city, s.state, s.zip, "
+        "  s.latitude, s.longitude, s.access, s.level2_ports, s.dcfc_ports "
+        "FROM stations s "
+        "WHERE s.latitude BETWEEN ? AND ? AND s.longitude BETWEEN ? AND ?"
     )
     params: List[object] = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
 
