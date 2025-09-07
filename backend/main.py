@@ -40,7 +40,7 @@ app = FastAPI(title="EV Charging API", version="v1")
 # CORS (open for dev; tighten in prod)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://ev-charger-api.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
